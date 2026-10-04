@@ -1,105 +1,52 @@
-import os
-import html
-import requests
-from datetime import datetime, timezone
-from xml.etree.ElementTree import Element, SubElement, ElementTree
+name: Update Ragnarok WOE RSS Feed
 
-API_KEY = os.environ["YOUTUBE_API_KEY"]
+on:
+  schedule:
+    - cron: "*/15 * * * *"
 
-SEARCH_QUERY = "ragnarok woe"
+  workflow_dispatch:
 
-MAX_RESULTS = 25
+permissions:
+  contents: write
 
-API_URL = "https://www.googleapis.com/youtube/v3/search"
+jobs:
+  update-feed:
+    runs-on: ubuntu-latest
 
-params = {
-    "part": "snippet",
-    "q": SEARCH_QUERY,
-    "type": "video",
-    "order": "date",
-    "maxResults": MAX_RESULTS,
-    "key": API_KEY,
-}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
 
-response = requests.get(API_URL, params=params, timeout=30)
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.x"
 
-if response.status_code != 200:
-    print("YouTube API error:")
-    print(response.text)
-    response.raise_for_status()
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests
 
-data = response.json()
+      - name: Generate RSS feed
+        env:
+          YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
+        run: |
+          python generate_feed.py
 
-rss = Element(
-    "rss",
-    {
-        "version": "2.0",
-        "xmlns:media": "http://search.yahoo.com/mrss/"
-    }
-)
+      - name: Check for changes
+        id: changes
+        run: |
+          if git diff --quiet feed.xml; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
 
-channel = SubElement(rss, "channel")
-
-SubElement(channel, "title").text = "Ragnarok WOE - YouTube Search"
-
-SubElement(channel, "description").text = (
-    "Latest YouTube videos matching the search: ragnarok woe"
-)
-
-SubElement(
-    channel,
-    "link"
-).text = "https://www.youtube.com/results?search_query=ragnarok+woe"
-
-SubElement(
-    channel,
-    "lastBuildDate"
-).text = datetime.now(timezone.utc).strftime(
-    "%a, %d %b %Y %H:%M:%S GMT"
-)
-
-for item in data.get("items", []):
-
-    video_id = item["id"]["videoId"]
-    snippet = item["snippet"]
-
-    title = snippet.get("title", "")
-    description = snippet.get("description", "")
-    channel_title = snippet.get("channelTitle", "")
-    published = snippet.get("publishedAt", "")
-
-    video_url = f"https://www.youtube.com/watch?v={video_id}"
-
-    rss_item = SubElement(channel, "item")
-
-    SubElement(rss_item, "title").text = title
-
-    SubElement(rss_item, "description").text = description
-
-    SubElement(rss_item, "link").text = video_url
-
-    SubElement(rss_item, "guid").text = video_id
-
-    SubElement(rss_item, "author").text = channel_title
-
-    SubElement(rss_item, "pubDate").text = published
-
-    thumbnail = SubElement(
-        rss_item,
-        "{http://search.yahoo.com/mrss/}thumbnail"
-    )
-
-    thumbnail.set(
-        "url",
-        f"https://i.ytimg.com/vi/{video_id}/maxresdefault.jpg"
-    )
-
-tree = ElementTree(rss)
-
-tree.write(
-    "feed.xml",
-    encoding="utf-8",
-    xml_declaration=True
-)
-
-print(f"Created RSS feed with {len(data.get('items', []))} videos.")
+      - name: Commit updated feed
+        if: steps.changes.outputs.changed == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add feed.xml
+          git commit -m "Update Ragnarok WOE RSS feed"
+          git push
